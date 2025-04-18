@@ -58,22 +58,24 @@ int main(int argc, char ** argv) {
 
   // read AIGER model
   aiger * aig = aiger_init();
-  const char * msg = aiger_read_from_file(aig, stdin);
+  FILE *file = fopen("./aag_files/simple.aag", "r+");
+  const char * msg = aiger_read_from_file(aig, file);
   if (msg) {
     cout << msg << endl;
-    return 0;
+    return -1;
   }
   // create the Model from the obtained aig
   Model * model = modelFromAiger(aig, propertyIndex);
   aiger_reset(aig);
-  if (!model) return 0;
+  if (!model) return -1;
 
   // model check it
   bool rv = IC3::check(*model, verbose, basic, random);
   // print 0/1 according to AIGER standard
   cout << !rv << endl;
 
+  fclose(file);
   delete model;
 
-  return 1;
+  return 0;
 }
