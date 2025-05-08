@@ -22,6 +22,7 @@ IN THE SOFTWARE.
 
 #include "aiger.h"
 
+#include <unistd.h>
 #include <assert.h>
 #include <stdarg.h>
 #include <stdlib.h>

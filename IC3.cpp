@@ -262,7 +262,7 @@ namespace IC3 {
     }
     class LitVecComp {
     public:
-      bool operator()(const LitVec & v1, const LitVec & v2) {
+      bool operator()(const LitVec & v1, const LitVec & v2) const {
         return _LitVecComp(v1, v2);
       }
     };
@@ -278,7 +278,7 @@ namespace IC3 {
     };
     class ObligationComp {
     public:
-      bool operator()(const Obligation & o1, const Obligation & o2) {
+      bool operator()(const Obligation & o1, const Obligation & o2) const {
         if (o1.level < o2.level) return true;  // prefer lower levels (required)
         if (o1.level > o2.level) return false;
         if (o1.depth < o2.depth) return true;  // prefer shallower (heuristic)
