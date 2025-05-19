@@ -4,6 +4,8 @@ CFLAGS=-std=c++20 -Wall -g
 
 INCLUDE=-Iminisat -Iminisat/minisat/core -Iminisat/minisat/mtl -Iminisat/minisat/simp -Iaiger
 
+MAKEFLAGS := --jobs=$(shell nproc) --keep-going
+
 all:	ic3
 
 ic3:	minisat/build/dynamic/lib/libminisat.so aiger/aiger.o Model.o IC3.o main.o
