@@ -1,5 +1,10 @@
 # TODO
 
+## For Markus
+
+* Get the invariant to be printed on completion
+* Get the invariant printed on each iteration
+
 ## Reading
 
 * Read more about AIGER format's extensions (after core MILOA)

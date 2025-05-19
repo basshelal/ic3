@@ -156,14 +156,16 @@ namespace IC3 {
 
         // Follows and prints chain of states from cexState forward.
         void printWitness() {
+            logV("Printing witness...");
             if (this->cexState != 0) {
-                size_t curr = cexState;
+                size_t curr = this->cexState;
                 while (curr) {
-                    cout << stringOfLitVec(state(curr).inputs)
-                            << stringOfLitVec(state(curr).latches) << endl;
+                    std::cout << this->stringOfLitVec(this->state(curr).inputs)
+                            << this->stringOfLitVec(this->state(curr).latches) << std::endl;
                     curr = state(curr).successor;
                 }
             }
+            logV("Witness printed!");
         }
 
     private:
@@ -196,7 +198,9 @@ namespace IC3 {
         vector<State> states;
         size_t nextState;
         // WARNING: do not keep reference across newState() calls
-        State &state(size_t sti) { return this->states[sti - 1]; }
+        State &state(size_t sti) {
+            return this->states[sti - 1];
+        }
 
         size_t newState() {
             if (this->nextState >= this->states.size()) {
@@ -224,10 +228,10 @@ namespace IC3 {
         }
 
         void resetStates() {
-            for (vector<State>::iterator i = states.begin(); i != states.end(); ++i) {
-                i->used = false;
-                i->latches.clear();
-                i->inputs.clear();
+            for (State &state: this->states) {
+                state.used = false;
+                state.latches.clear();
+                state.inputs.clear();
             }
             this->nextState = 0;
         }
@@ -235,19 +239,27 @@ namespace IC3 {
         class LitVecComp {
         public:
             // A CubeSet is a set of ordered (by integer value) vectors of
-            // Minisat::Lits.
+            // Minisat::Lits
             bool operator()(const LitVec &v1, const LitVec &v2) const {
-                if (v1.size() < v2.size()) return true;
-                if (v1.size() > v2.size()) return false;
+                if (v1.size() < v2.size()) {
+                    return true;
+                }
+                if (v1.size() > v2.size()) {
+                    return false;
+                }
                 for (size_t i = 0; i < v1.size(); ++i) {
-                    if (v1[i] < v2[i]) return true;
-                    if (v2[i] < v1[i]) return false;
+                    if (v1[i] < v2[i]) {
+                        return true;
+                    }
+                    if (v2[i] < v1[i]) {
+                        return false;
+                    }
                 }
                 return false;
             }
         };
 
-        typedef set<LitVec, LitVecComp> CubeSet;
+        typedef std::set<LitVec, LitVecComp> CubeSet;
 
         // A proof obligation.
         struct Obligation {
@@ -263,16 +275,26 @@ namespace IC3 {
         class ObligationComp {
         public:
             bool operator()(const Obligation &o1, const Obligation &o2) const {
-                if (o1.level < o2.level) return true; // prefer lower levels (required)
-                if (o1.level > o2.level) return false;
-                if (o1.depth < o2.depth) return true; // prefer shallower (heuristic)
-                if (o1.depth > o2.depth) return false;
-                if (o1.state < o2.state) return true; // canonical final decider
+                if (o1.level < o2.level) {
+                    return true; // prefer lower levels (required)
+                }
+                if (o1.level > o2.level) {
+                    return false;
+                }
+                if (o1.depth < o2.depth) {
+                    return true; // prefer shallower (heuristic)
+                }
+                if (o1.depth > o2.depth) {
+                    return false;
+                }
+                if (o1.state < o2.state) {
+                    return true; // canonical final decider
+                }
                 return false;
             }
         };
 
-        typedef set<Obligation, ObligationComp> PriorityQueue;
+        typedef std::set<Obligation, ObligationComp> PriorityQueue;
 
         // For IC3's overall frame structure.
         struct Frame {
@@ -359,23 +381,25 @@ namespace IC3 {
         float numLits, numUpdates;
 
         void updateLitOrder(const LitVec &cube, size_t level) {
-            litOrder.decay();
-            numUpdates += 1;
-            numLits += cube.size();
-            litOrder.count(cube);
+            this->litOrder.decay();
+            this->numUpdates++;
+            this->numLits += cube.size();
+            this->litOrder.count(cube);
         }
 
         // order according to preference
         void orderCube(LitVec &cube) {
-            stable_sort(cube.begin(), cube.end(), slimLitOrder);
+            std::stable_sort(cube.begin(), cube.end(), this->slimLitOrder);
         }
 
         typedef Minisat::vec<Minisat::Lit> MSLitVec;
 
         // Orders assumptions for Minisat.
         void orderAssumps(MSLitVec &cube, bool rev, int start = 0) {
-            stable_sort(cube + start, cube + cube.size(), slimLitOrder);
-            if (rev) reverse(cube + start, cube + cube.size());
+            std::stable_sort(cube + start, cube + cube.size(), this->slimLitOrder);
+            if (rev) {
+                std::reverse(cube + start, cube + cube.size());
+            }
         }
 
         // Assumes that last call to fr.consecution->solve() was
@@ -396,7 +420,7 @@ namespace IC3 {
             if (succ == 0) {
                 cls.push(~model.primedError());
             } else {
-                for (LitVec::const_iterator i = state(succ).latches.begin();
+                for (LitVec::const_iterator i = this->state(succ).latches.begin();
                      i != this->state(succ).latches.end(); ++i) {
                     cls.push(this->model.primeLit(~*i));
                 }
@@ -568,7 +592,7 @@ namespace IC3 {
                     // QUERY: generalize then push or vice versa?
                     while (j <= k && consecution(j, ctgCore)) ++j;
                     mic(j - 1, ctgCore, recDepth + 1);
-                    addCube(j, ctgCore);
+                    this->addCube(j, ctgCore);
                 } else if (joins < maxJoins) {
                     // ran out of CTG attempts, so join instead
                     ctgs = 0;
@@ -602,7 +626,7 @@ namespace IC3 {
             ++nmic; // stats
             // try dropping each literal in turn
             size_t attempts = micAttempts;
-            orderCube(cube);
+            this->orderCube(cube);
             for (size_t i = 0; i < cube.size();) {
                 LitVec cp(cube.begin(), cube.begin() + i);
                 cp.insert(cp.end(), cube.begin() + i + 1, cube.end());
@@ -642,36 +666,44 @@ namespace IC3 {
         // case only to level.
         void addCube(size_t level, LitVec &cube, bool toAll = true,
                      bool silent = false) {
-            sort(cube.begin(), cube.end());
-            pair<CubeSet::iterator, bool> rv = frames[level].borderCubes.insert(cube);
-            if (!rv.second) return;
-            if (!silent && verbose > 1)
-                cout << level << ": " << stringOfLitVec(cube) << endl;
-            earliest = min(earliest, level);
+            std::sort(cube.begin(), cube.end());
+            std::pair<CubeSet::iterator, bool> rv = this->frames[level].borderCubes.insert(cube);
+            if (!rv.second) {
+                return;
+            }
+            if (!silent && this->verbose > 1) {
+                std::cout << "level " << level << ":\t"
+                        << this->stringOfLitVec(cube) << std::endl;
+            }
+            this->earliest = std::min(this->earliest, level);
             MSLitVec cls;
             cls.capacity(cube.size());
-            for (LitVec::const_iterator i = cube.begin(); i != cube.end(); ++i)
-                cls.push(~*i);
-            for (size_t i = toAll ? 1 : level; i <= level; ++i)
-                frames[i].consecution->addClause(cls);
-            if (toAll && !silent) updateLitOrder(cube, level);
+            for (const Minisat::Lit &i: cube) {
+                cls.push(~i);
+            }
+            for (size_t i = toAll ? 1 : level; i <= level; ++i) {
+                this->frames[i].consecution->addClause(cls);
+            }
+            if (toAll && !silent) {
+                this->updateLitOrder(cube, level);
+            }
         }
 
         // ~cube was found to be inductive relative to level; now see if
         // we can do better.
-        size_t generalize(size_t level, LitVec cube) {
+        size_t generalize(size_t level, LitVec &cube) {
             // generalize
-            mic(level, cube);
+            this->mic(level, cube);
             // push
             do { ++level; } while (level <= k && consecution(level, cube));
-            addCube(level, cube);
+            this->addCube(level, cube);
             return level;
         }
 
         size_t cexState; // beginning of counterexample trace
 
         // Process obligations according to priority.
-        bool handleObligations(PriorityQueue obls) {
+        bool handleObligations(PriorityQueue &obls) {
             while (!obls.empty()) {
                 PriorityQueue::iterator obli = obls.begin();
                 Obligation obl = *obli;
@@ -735,39 +767,43 @@ namespace IC3 {
         // strengthenings of the property.  See the four invariants of IC3
         // in the original paper.
         bool propagate() {
-            if (verbose > 1) cout << "propagate" << endl;
+            if (this->verbose > 1) {
+                std::cout << "propagate" << std::endl;
+            }
             // 1. clean up: remove c in frame i if c appears in frame j when i < j
             CubeSet all;
-            for (size_t i = k + 1; i >= earliest; --i) {
-                Frame &fr = frames[i];
+            for (size_t i = k + 1; i >= this->earliest; --i) {
+                Frame &fr = this->frames[i];
                 CubeSet rem, nall;
-                set_difference(fr.borderCubes.begin(), fr.borderCubes.end(),
-                               all.begin(), all.end(),
-                               inserter(rem, rem.end()), LitVecComp());
-                if (verbose > 1)
-                    cout << i << " " << fr.borderCubes.size() << " " << rem.size() << " ";
+                std::set_difference(fr.borderCubes.begin(), fr.borderCubes.end(),
+                                    all.begin(), all.end(),
+                                    std::inserter(rem, rem.end()), LitVecComp());
+                if (this->verbose > 1) {
+                    std::cout << i << " " << fr.borderCubes.size() << " " << rem.size() << " ";
+                }
                 fr.borderCubes.swap(rem);
-                set_union(rem.begin(), rem.end(),
-                          all.begin(), all.end(),
-                          inserter(nall, nall.end()), LitVecComp());
+                std::set_union(rem.begin(), rem.end(),
+                               all.begin(), all.end(),
+                               std::inserter(nall, nall.end()), LitVecComp());
                 all.swap(nall);
-                for (CubeSet::const_iterator i = fr.borderCubes.begin();
-                     i != fr.borderCubes.end(); ++i)
-                    assert(all.find(*i) != all.end());
-                if (verbose > 1)
-                    cout << all.size() << endl;
+                for (const LitVec &borderCube: fr.borderCubes) {
+                    assert(all.contains(borderCube));
+                }
+                if (this->verbose > 1) {
+                    std::cout << all.size() << std::endl;
+                }
             }
             // 2. check if each c in frame i can be pushed to frame j
-            for (size_t i = trivial ? k : 1; i <= k; ++i) {
+            for (size_t i = this->trivial ? this->k : 1; i <= this->k; ++i) {
                 int ckeep = 0, cprop = 0, cdrop = 0;
-                Frame &fr = frames[i];
+                Frame &fr = this->frames[i];
                 for (CubeSet::iterator j = fr.borderCubes.begin();
                      j != fr.borderCubes.end();) {
                     LitVec core;
-                    if (consecution(i, *j, 0, &core)) {
+                    if (this->consecution(i, *j, 0, &core)) {
                         ++cprop;
                         // only add to frame i+1 unless the core is reduced
-                        addCube(i + 1, core, core.size() < j->size(), true);
+                        this->addCube(i + 1, core, core.size() < j->size(), true);
                         CubeSet::iterator tmp = j;
                         ++j;
                         fr.borderCubes.erase(tmp);
@@ -776,15 +812,18 @@ namespace IC3 {
                         ++j;
                     }
                 }
-                if (verbose > 1)
+                if (this->verbose > 1) {
                     cout << i << " " << ckeep << " " << cprop << " " << cdrop << endl;
-                if (fr.borderCubes.empty())
+                }
+                if (fr.borderCubes.empty()) {
                     return true;
+                }
             }
             // 3. simplify frames
-            for (size_t i = trivial ? k : 1; i <= k + 1; ++i)
-                frames[i].consecution->simplify();
-            lifts->simplify();
+            for (size_t i = this->trivial ? this->k : 1; i <= this->k + 1; ++i) {
+                this->frames[i].consecution->simplify();
+            }
+            this->lifts->simplify();
             return false;
         }
 
