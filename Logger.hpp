@@ -4,6 +4,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 
+#define trace(format, ...) printf("[trace]: " format "\n", ##__VA_ARGS__)
 #define logV(format, ...) printf("[verbose]: " format "\n", ##__VA_ARGS__)
 #define logD(format, ...) printf("[debug]: " format "\n", ##__VA_ARGS__)
 #define logI(format, ...) printf("[info]: " format "\n", ##__VA_ARGS__)

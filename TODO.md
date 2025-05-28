@@ -2,6 +2,7 @@
 
 ## For Markus
 
+* Make/get a medium sized toy example, use Harry's thesis example
 * Get the invariant to be printed on completion
 * Get the invariant printed on each iteration
 

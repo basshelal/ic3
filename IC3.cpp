@@ -107,6 +107,178 @@
 
 namespace IC3 {
     class IC3 {
+    private: // types
+        // The State structures are for tracking trees of (lifted) CTIs.
+        // Because States are created frequently, I want to avoid dynamic
+        // memory management; instead their (de)allocation is handled via
+        // a vector-based pool.
+        struct State {
+            std::size_t successor; // successor State
+            LitVec latches;
+            LitVec inputs;
+            std::size_t index; // for pool
+            bool used; // for pool
+        };
+
+        struct LitVecComp {
+            // A CubeSet is a set of ordered (by integer value) vectors of
+            // Minisat::Lits
+            bool operator()(const LitVec &v1, const LitVec &v2) const {
+                if (v1.size() < v2.size()) {
+                    return true;
+                }
+                if (v1.size() > v2.size()) {
+                    return false;
+                }
+                assert(v1.size() == v2.size());
+                for (std::size_t i = 0; i < v1.size(); ++i) {
+                    if (v1[i] < v2[i]) {
+                        return true;
+                    }
+                    if (v2[i] < v1[i]) {
+                        return false;
+                    }
+                }
+                return false;
+            }
+        };
+
+        typedef std::set<LitVec, LitVecComp> CubeSet;
+
+        // A proof obligation.
+        struct Obligation {
+            Obligation(std::size_t st, std::size_t l, std::size_t d)
+                : state(st), level(l), depth(d) {
+            }
+
+            std::size_t state; // Generalize this state...
+            std::size_t level; // ... relative to this level.
+            std::size_t depth; // Length of CTI suffix to error.
+        };
+
+        class ObligationComp {
+        public:
+            bool operator()(const Obligation &o1, const Obligation &o2) const {
+                if (o1.level < o2.level) {
+                    return true; // prefer lower levels (required)
+                }
+                if (o1.level > o2.level) {
+                    return false;
+                }
+                if (o1.depth < o2.depth) {
+                    return true; // prefer shallower (heuristic)
+                }
+                if (o1.depth > o2.depth) {
+                    return false;
+                }
+                if (o1.state < o2.state) {
+                    return true; // canonical final decider
+                }
+                return false;
+            }
+        };
+
+        typedef std::set<Obligation, ObligationComp> PriorityQueue;
+
+        // For IC3's overall frame structure.
+        struct Frame {
+            std::size_t k; // steps from initial state
+            CubeSet borderCubes; // additional cubes in this and previous frames
+            Minisat::Solver *consecution;
+        };
+
+        // Structure and methods for imposing priorities on literals
+        // through ordering the dropping of literals in mic (drop leftmost
+        // literal first) and assumptions to Minisat.  The implemented
+        // ordering prefers to keep literals that appear frequently in
+        // addCube() calls.
+        struct HeuristicLitOrder {
+            std::vector<float> counts;
+            std::size_t _mini = 1 << 20;
+
+            void count(const LitVec &cube) {
+                assert(!cube.empty());
+                // assumes cube is ordered
+                const auto sz = static_cast<std::size_t>(
+                    Minisat::toInt(Minisat::var(cube.back()))
+                );
+                if (sz >= this->counts.size()) {
+                    this->counts.resize(sz + 1);
+                }
+                this->_mini = (std::size_t) Minisat::toInt(Minisat::var(cube[0]));
+                for (const Minisat::Lit &lit: cube) {
+                    const auto index = static_cast<std::size_t>(Minisat::toInt(Minisat::var(lit)));
+                    this->counts[index] += 1;
+                }
+            }
+
+            void decay() {
+                for (std::size_t i = this->_mini; i < this->counts.size(); ++i) {
+                    this->counts[i] *= 0.99;
+                }
+            }
+        };
+
+        struct SlimLitOrder {
+            HeuristicLitOrder *heuristicLitOrder;
+
+            bool operator()(const Minisat::Lit &l1, const Minisat::Lit &l2) const {
+                // l1, l2 must be unprimed
+                const auto i2 = static_cast<std::size_t>(Minisat::toInt(Minisat::var(l2)));
+                if (i2 >= this->heuristicLitOrder->counts.size()) {
+                    return false;
+                }
+                const auto i1 = static_cast<std::size_t>(Minisat::toInt(Minisat::var(l1)));
+                if (i1 >= this->heuristicLitOrder->counts.size()) {
+                    return true;
+                }
+                return (this->heuristicLitOrder->counts[i1] < this->heuristicLitOrder->counts[i2]);
+            }
+        };
+
+        typedef Minisat::vec<Minisat::Lit> MSLitVec;
+
+    private: // fields
+        int verbose; // 0: silent, 1: stats, 2: all
+        bool random;
+        Model &model;
+        std::size_t k;
+        std::vector<State> states;
+        std::size_t nextState;
+        std::vector<Frame> frames;
+
+        Minisat::Solver *lifts;
+        Minisat::Lit notInvConstraints;
+
+        HeuristicLitOrder litOrder;
+
+        SlimLitOrder slimLitOrder;
+
+        float numLits;
+        float numUpdates;
+
+        std::size_t maxDepth;
+        std::size_t maxCTGs;
+        std::size_t maxJoins;
+        std::size_t micAttempts;
+
+        std::size_t earliest; // track earliest modified level in a major iteration
+
+        std::size_t cexState; // beginning of counterexample trace
+
+        bool trivial; // indicates whether strengthening was required during major iteration
+
+        int nQuery;
+        int nCTI;
+        int nCTG;
+        int nmic;
+        ::clock_t startTime;
+        ::clock_t satTime;
+        int nCoreReduced;
+        int nAbortJoin;
+        int nAbortMic;
+        ::clock_t timer;
+
     public:
         IC3(Model &_model)
             : verbose(0), random(false), model(_model), k(1), nextState(0),
@@ -162,16 +334,13 @@ namespace IC3 {
                 while (curr) {
                     std::cout << this->stringOfLitVec(this->state(curr).inputs)
                             << this->stringOfLitVec(this->state(curr).latches) << std::endl;
-                    curr = state(curr).successor;
+                    curr = this->state(curr).successor;
                 }
             }
             logV("Witness printed!");
         }
 
     private:
-        int verbose; // 0: silent, 1: stats, 2: all
-        bool random;
-
         string stringOfLitVec(const LitVec &vec) {
             stringstream ss;
             for (const Minisat::Lit &i: vec) {
@@ -180,23 +349,6 @@ namespace IC3 {
             return ss.str();
         }
 
-        Model &model;
-        size_t k;
-
-        // The State structures are for tracking trees of (lifted) CTIs.
-        // Because States are created frequently, I want to avoid dynamic
-        // memory management; instead their (de)allocation is handled via
-        // a vector-based pool.
-        struct State {
-            size_t successor; // successor State
-            LitVec latches;
-            LitVec inputs;
-            size_t index; // for pool
-            bool used; // for pool
-        };
-
-        vector<State> states;
-        size_t nextState;
         // WARNING: do not keep reference across newState() calls
         State &state(size_t sti) {
             return this->states[sti - 1];
@@ -236,151 +388,30 @@ namespace IC3 {
             this->nextState = 0;
         }
 
-        class LitVecComp {
-        public:
-            // A CubeSet is a set of ordered (by integer value) vectors of
-            // Minisat::Lits
-            bool operator()(const LitVec &v1, const LitVec &v2) const {
-                if (v1.size() < v2.size()) {
-                    return true;
-                }
-                if (v1.size() > v2.size()) {
-                    return false;
-                }
-                for (size_t i = 0; i < v1.size(); ++i) {
-                    if (v1[i] < v2[i]) {
-                        return true;
-                    }
-                    if (v2[i] < v1[i]) {
-                        return false;
-                    }
-                }
-                return false;
-            }
-        };
-
-        typedef std::set<LitVec, LitVecComp> CubeSet;
-
-        // A proof obligation.
-        struct Obligation {
-            Obligation(size_t st, size_t l, size_t d)
-                : state(st), level(l), depth(d) {
-            }
-
-            size_t state; // Generalize this state...
-            size_t level; // ... relative to this level.
-            size_t depth; // Length of CTI suffix to error.
-        };
-
-        class ObligationComp {
-        public:
-            bool operator()(const Obligation &o1, const Obligation &o2) const {
-                if (o1.level < o2.level) {
-                    return true; // prefer lower levels (required)
-                }
-                if (o1.level > o2.level) {
-                    return false;
-                }
-                if (o1.depth < o2.depth) {
-                    return true; // prefer shallower (heuristic)
-                }
-                if (o1.depth > o2.depth) {
-                    return false;
-                }
-                if (o1.state < o2.state) {
-                    return true; // canonical final decider
-                }
-                return false;
-            }
-        };
-
-        typedef std::set<Obligation, ObligationComp> PriorityQueue;
-
-        // For IC3's overall frame structure.
-        struct Frame {
-            size_t k; // steps from initial state
-            CubeSet borderCubes; // additional cubes in this and previous frames
-            Minisat::Solver *consecution;
-        };
-
-        std::vector<Frame> frames;
-
-        Minisat::Solver *lifts;
-        Minisat::Lit notInvConstraints;
-
-        // Push a new Frame.
+        // Push new Frames,
+        //  each frame has its own solver, load each frame's solver with all the clauses it needs
         void extend() {
             while (this->frames.size() < this->k + 2) {
                 logV("Extending frames to new size: %lu", this->frames.size() + 1);
                 // Push a new frame at the end
                 this->frames.resize(this->frames.size() + 1);
-                Frame &fr = this->frames.back();
-                fr.k = this->frames.size() - 1;
-                logV("New frame step: %lu", fr.k);
+                Frame &newFrame = this->frames.back();
+                newFrame.k = this->frames.size() - 1;
+                logV("New frame step: %lu", newFrame.k);
 
-                fr.consecution = this->model.newSolver();
+                newFrame.consecution = this->model.newSolver();
                 if (this->random) {
-                    fr.consecution->random_seed = std::rand();
-                    fr.consecution->rnd_init_act = true;
+                    newFrame.consecution->random_seed = std::rand();
+                    newFrame.consecution->rnd_init_act = true;
                 }
-                if (fr.k == 0) {
-                    this->model.loadInitialCondition(*fr.consecution);
+                if (newFrame.k == 0) {
+                    this->model.loadInitialCondition(*newFrame.consecution);
                 }
-                this->model.loadTransitionRelation(*fr.consecution);
+                this->model.loadTransitionRelation(*newFrame.consecution, true);
             }
         }
 
-        // Structure and methods for imposing priorities on literals
-        // through ordering the dropping of literals in mic (drop leftmost
-        // literal first) and assumptions to Minisat.  The implemented
-        // ordering prefers to keep literals that appear frequently in
-        // addCube() calls.
-        struct HeuristicLitOrder {
-            HeuristicLitOrder()
-                : _mini(1 << 20) {
-            }
-
-            vector<float> counts;
-            size_t _mini;
-
-            void count(const LitVec &cube) {
-                assert(!cube.empty());
-                // assumes cube is ordered
-                size_t sz = (size_t) Minisat::toInt(Minisat::var(cube.back()));
-                if (sz >= this->counts.size()) {
-                    this->counts.resize(sz + 1);
-                }
-                this->_mini = (size_t) Minisat::toInt(Minisat::var(cube[0]));
-                for (LitVec::const_iterator i = cube.begin(); i != cube.end(); ++i) {
-                    this->counts[(size_t) Minisat::toInt(Minisat::var(*i))] += 1;
-                }
-            }
-
-            void decay() {
-                for (size_t i = _mini; i < counts.size(); ++i)
-                    counts[i] *= 0.99;
-            }
-        } litOrder;
-
-        struct SlimLitOrder {
-            HeuristicLitOrder *heuristicLitOrder;
-
-            SlimLitOrder() {
-            }
-
-            bool operator()(const Minisat::Lit &l1, const Minisat::Lit &l2) const {
-                // l1, l2 must be unprimed
-                size_t i2 = (size_t) Minisat::toInt(Minisat::var(l2));
-                if (i2 >= heuristicLitOrder->counts.size()) return false;
-                size_t i1 = (size_t) Minisat::toInt(Minisat::var(l1));
-                if (i1 >= heuristicLitOrder->counts.size()) return true;
-                return (heuristicLitOrder->counts[i1] < heuristicLitOrder->counts[i2]);
-            }
-        } slimLitOrder;
-
-        float numLits, numUpdates;
-
-        void updateLitOrder(const LitVec &cube, size_t level) {
+        void updateLitOrder(const LitVec &cube) {
             this->litOrder.decay();
             this->numUpdates++;
             this->numLits += cube.size();
@@ -391,8 +422,6 @@ namespace IC3 {
         void orderCube(LitVec &cube) {
             std::stable_sort(cube.begin(), cube.end(), this->slimLitOrder);
         }
-
-        typedef Minisat::vec<Minisat::Lit> MSLitVec;
 
         // Orders assumptions for Minisat.
         void orderAssumps(MSLitVec &cube, bool rev, int start = 0) {
@@ -485,62 +514,69 @@ namespace IC3 {
         // inductive and core is provided, extracts the unsat core.  If
         // it's not inductive and pred is provided, extracts
         // predecessor(s).
-        bool consecution(size_t fi, const LitVec &latches, size_t succ = 0,
-                         LitVec *core = nullptr, size_t *pred = nullptr,
+        bool consecution(std::size_t fi, const LitVec &latches, size_t succ = 0,
+                         LitVec *core = nullptr, std::size_t *predecessor = nullptr,
                          bool orderedCore = false) {
-            Frame &fr = frames[fi];
-            MSLitVec assumps, cls;
+            Frame &fr = this->frames[fi];
+            MSLitVec assumps;
+            MSLitVec cls;
             assumps.capacity(1 + latches.size());
             cls.capacity(1 + latches.size());
             Minisat::Lit act = Minisat::mkLit(fr.consecution->newVar());
             assumps.push(act);
             cls.push(~act);
-            for (LitVec::const_iterator i = latches.begin();
-                 i != latches.end(); ++i) {
+            for (LitVec::const_iterator i = latches.begin(); i != latches.end(); ++i) {
                 cls.push(~*i);
                 assumps.push(*i); // push unprimed...
             }
             // ... order... (empirically found to best choice)
-            if (pred) orderAssumps(assumps, false, 1);
-            else orderAssumps(assumps, orderedCore, 1);
+            if (predecessor) {
+                this->orderAssumps(assumps, false, 1);
+            } else {
+                this->orderAssumps(assumps, orderedCore, 1);
+            }
             // ... now prime
-            for (int i = 1; i < assumps.size(); ++i)
-                assumps[i] = model.primeLit(assumps[i]);
+            for (int i = 1; i < assumps.size(); ++i) {
+                assumps[i] = this->model.primeLit(assumps[i]);
+            }
             fr.consecution->addClause_(cls);
             // F_fi & ~latches & T & latches'
-            ++nQuery;
-            startTimer(); // stats
+            ++this->nQuery;
+            this->startTimer(); // stats
             bool rv = fr.consecution->solve(assumps);
-            endTimer(satTime);
+            this->endTimer(this->satTime);
             if (rv) {
                 // fails: extract predecessor(s)
-                if (pred) *pred = stateOf(fr, succ);
+                if (predecessor) {
+                    *predecessor = this->stateOf(fr, succ);
+                }
                 fr.consecution->releaseVar(~act);
                 return false;
             }
             // succeeds
             if (core) {
-                if (pred && orderedCore) {
+                if (predecessor && orderedCore) {
                     // redo with correctly ordered assumps
-                    reverse(assumps + 1, assumps + assumps.size());
-                    ++nQuery;
-                    startTimer(); // stats
+                    std::reverse(assumps + 1, assumps + assumps.size());
+                    ++this->nQuery;
+                    this->startTimer(); // stats
                     rv = fr.consecution->solve(assumps);
                     assert(!rv);
-                    endTimer(satTime);
+                    this->endTimer(this->satTime);
                 }
                 for (LitVec::const_iterator i = latches.begin();
-                     i != latches.end(); ++i)
-                    if (fr.consecution->conflict.has(~model.primeLit(*i)))
+                     i != latches.end(); ++i) {
+                    if (fr.consecution->conflict.has(~this->model.primeLit(*i))) {
                         core->push_back(*i);
-                if (!initiation(*core))
+                    }
+                }
+                if (!this->initiation(*core)) {
                     *core = latches;
+                }
             }
             fr.consecution->releaseVar(~act);
             return true;
         }
-
-        size_t maxDepth, maxCTGs, maxJoins, micAttempts;
 
         // Based on
         //
@@ -549,72 +585,80 @@ namespace IC3 {
         //
         // Improves upon "down" from the original paper (and the FMCAD'07
         // paper) by handling CTGs.
-        bool ctgDown(size_t level, LitVec &cube, size_t keepTo, size_t recDepth) {
-            size_t ctgs = 0, joins = 0;
+        bool ctgDown(std::size_t level, LitVec &cube, std::size_t keepTo, std::size_t recDepth) {
+            std::size_t ctgs = 0;
+            std::size_t joins = 0;
             while (true) {
                 // induction check
-                if (!initiation(cube))
+                if (!this->initiation(cube)) {
                     return false;
-                if (recDepth > maxDepth) {
+                }
+                if (recDepth > this->maxDepth) {
                     // quick check if recursion depth is exceeded
                     LitVec core;
-                    bool rv = consecution(level, cube, 0, &core, NULL, true);
+                    bool rv = this->consecution(level, cube, 0, &core, nullptr, true);
                     if (rv && core.size() < cube.size()) {
-                        ++nCoreReduced; // stats
+                        ++this->nCoreReduced; // stats
                         cube = core;
                     }
                     return rv;
                 }
                 // prepare to obtain CTG
-                size_t cubeState = newState();
-                state(cubeState).successor = 0;
-                state(cubeState).latches = cube;
-                size_t ctg;
+                std::size_t cubeState = this->newState();
+                this->state(cubeState).successor = 0;
+                this->state(cubeState).latches = cube;
+                std::size_t ctg;
                 LitVec core;
-                if (consecution(level, cube, cubeState, &core, &ctg, true)) {
+                if (this->consecution(level, cube, cubeState, &core, &ctg, true)) {
                     if (core.size() < cube.size()) {
-                        ++nCoreReduced; // stats
+                        ++this->nCoreReduced; // stats
                         cube = core;
                     }
                     // inductive, so clean up
-                    delState(cubeState);
+                    this->delState(cubeState);
                     return true;
                 }
                 // not inductive, address interfering CTG
                 LitVec ctgCore;
                 bool ret = false;
-                if (ctgs < maxCTGs && level > 1 && initiation(state(ctg).latches)
-                    && consecution(level - 1, state(ctg).latches, cubeState, &ctgCore)) {
+                if (ctgs < this->maxCTGs && level > 1 && this->initiation(this->state(ctg).latches)
+                    && consecution(level - 1, this->state(ctg).latches, cubeState, &ctgCore)) {
                     // CTG is inductive relative to level-1; push forward and generalize
-                    ++nCTG; // stats
+                    ++this->nCTG; // stats
                     ++ctgs;
                     size_t j = level;
                     // QUERY: generalize then push or vice versa?
-                    while (j <= k && consecution(j, ctgCore)) ++j;
-                    mic(j - 1, ctgCore, recDepth + 1);
+                    while (j <= this->k && this->consecution(j, ctgCore)) {
+                        ++j;
+                    }
+                    this->mic(j - 1, ctgCore, recDepth + 1);
                     this->addCube(j, ctgCore);
-                } else if (joins < maxJoins) {
+                } else if (joins < this->maxJoins) {
                     // ran out of CTG attempts, so join instead
                     ctgs = 0;
                     ++joins;
                     LitVec tmp;
-                    for (size_t i = 0; i < cube.size(); ++i)
-                        if (binary_search(state(ctg).latches.begin(),
-                                          state(ctg).latches.end(), cube[i]))
+                    for (size_t i = 0; i < cube.size(); ++i) {
+                        if (std::binary_search(this->state(ctg).latches.begin(),
+                                               this->state(ctg).latches.end(), cube[i])) {
                             tmp.push_back(cube[i]);
-                        else if (i < keepTo) {
+                        } else if (i < keepTo) {
                             // previously failed when this literal was dropped
-                            ++nAbortJoin; // stats
+                            ++this->nAbortJoin; // stats
                             ret = true;
                             break;
                         }
+                    }
                     cube = tmp; // enlarged cube
-                } else
+                } else {
                     ret = true;
+                }
                 // clean up
-                delState(cubeState);
-                delState(ctg);
-                if (ret) return false;
+                this->delState(cubeState);
+                this->delState(ctg);
+                if (ret) {
+                    return false;
+                }
             }
         }
 
@@ -622,24 +666,26 @@ namespace IC3 {
         // ~cube --- at least that's where the name comes from.  With
         // ctgDown, it's not quite a MIC anymore, but what's returned is
         // inductive relative to the possibly modifed level.
-        void mic(size_t level, LitVec &cube, size_t recDepth) {
-            ++nmic; // stats
+        void mic(std::size_t level, LitVec &cube, std::size_t recDepth) {
+            ++this->nmic; // stats
             // try dropping each literal in turn
-            size_t attempts = micAttempts;
+            std::size_t attempts = this->micAttempts;
             this->orderCube(cube);
-            for (size_t i = 0; i < cube.size();) {
+            for (std::size_t i = 0; i < cube.size();) {
                 LitVec cp(cube.begin(), cube.begin() + i);
                 cp.insert(cp.end(), cube.begin() + i + 1, cube.end());
-                if (ctgDown(level, cp, i, recDepth)) {
+                if (this->ctgDown(level, cp, i, recDepth)) {
                     // maintain original order
                     LitSet lits(cp.begin(), cp.end());
                     LitVec tmp;
-                    for (LitVec::const_iterator j = cube.begin(); j != cube.end(); ++j)
-                        if (lits.find(*j) != lits.end())
-                            tmp.push_back(*j);
+                    for (const Minisat::Lit &lit: cube) {
+                        if (lits.contains(lit)) {
+                            tmp.push_back(lit);
+                        }
+                    }
                     cube.swap(tmp);
                     // reset attempts
-                    attempts = micAttempts;
+                    attempts = this->micAttempts;
                 } else {
                     if (!--attempts) {
                         // Limit number of attempts: if micAttempts literals in a
@@ -647,31 +693,28 @@ namespace IC3 {
                         // about minimal.  Definitely improves mics/second to use
                         // a low micAttempts, but does it improve overall
                         // performance?
-                        ++nAbortMic; // stats
+                        this->nAbortMic++; // stats
                         return;
                     }
-                    ++i;
+                    i++;
                 }
             }
         }
 
         // wrapper to start inductive generalization
-        void mic(size_t level, LitVec &cube) {
-            mic(level, cube, 1);
+        void mic(std::size_t level, LitVec &cube) {
+            this->mic(level, cube, 1);
         }
-
-        size_t earliest; // track earliest modified level in a major iteration
 
         // Adds cube to frames at and below level, unless !toAll, in which
         // case only to level.
-        void addCube(size_t level, LitVec &cube, bool toAll = true,
-                     bool silent = false) {
+        void addCube(std::size_t level, LitVec &cube, bool toAll = true) {
             std::sort(cube.begin(), cube.end());
             std::pair<CubeSet::iterator, bool> rv = this->frames[level].borderCubes.insert(cube);
             if (!rv.second) {
                 return;
             }
-            if (!silent && this->verbose > 1) {
+            if (this->verbose > 1) {
                 std::cout << "level " << level << ":\t"
                         << this->stringOfLitVec(cube) << std::endl;
             }
@@ -681,26 +724,26 @@ namespace IC3 {
             for (const Minisat::Lit &i: cube) {
                 cls.push(~i);
             }
-            for (size_t i = toAll ? 1 : level; i <= level; ++i) {
+            for (std::size_t i = toAll ? 1 : level; i <= level; ++i) {
                 this->frames[i].consecution->addClause(cls);
             }
-            if (toAll && !silent) {
-                this->updateLitOrder(cube, level);
+            if (toAll) {
+                this->updateLitOrder(cube);
             }
         }
 
         // ~cube was found to be inductive relative to level; now see if
         // we can do better.
-        size_t generalize(size_t level, LitVec &cube) {
+        std::size_t generalize(std::size_t level, LitVec &cube) {
             // generalize
             this->mic(level, cube);
             // push
-            do { ++level; } while (level <= k && consecution(level, cube));
+            do {
+                ++level;
+            } while (level <= this->k && this->consecution(level, cube));
             this->addCube(level, cube);
             return level;
         }
-
-        size_t cexState; // beginning of counterexample trace
 
         // Process obligations according to priority.
         bool handleObligations(PriorityQueue &obls) {
@@ -708,31 +751,29 @@ namespace IC3 {
                 PriorityQueue::iterator obli = obls.begin();
                 Obligation obl = *obli;
                 LitVec core;
-                size_t predi;
+                std::size_t predi;
                 // Is the obligation fulfilled?
-                if (consecution(obl.level, state(obl.state).latches, obl.state,
-                                &core, &predi)) {
+                if (this->consecution(obl.level, this->state(obl.state).latches, obl.state,
+                                      &core, &predi)) {
                     // Yes, so generalize and possibly produce a new obligation
                     // at a higher level.
                     obls.erase(obli);
-                    size_t n = generalize(obl.level, core);
-                    if (n <= k)
+                    std::size_t n = this->generalize(obl.level, core);
+                    if (n <= k) {
                         obls.insert(Obligation(obl.state, n, obl.depth));
+                    }
                 } else if (obl.level == 0) {
                     // No, in fact an initial state is a predecessor.
-                    cexState = predi;
+                    this->cexState = predi;
                     return false;
                 } else {
-                    ++nCTI; // stats
+                    ++this->nCTI; // stats
                     // No, so focus on predecessor.
                     obls.insert(Obligation(predi, obl.level - 1, obl.depth + 1));
                 }
             }
             return true;
         }
-
-        bool trivial; // indicates whether strengthening was required
-        // during major iteration
 
         // Strengthens frontier to remove error successors.
         bool strengthen() {
@@ -742,8 +783,8 @@ namespace IC3 {
             while (true) {
                 this->nQuery++;
                 this->startTimer(); // stats
-                bool rv = frontier.consecution->solve(model.primedError());
-                this->endTimer(satTime);
+                bool rv = frontier.consecution->solve(this->model.primedError());
+                this->endTimer(this->satTime);
                 if (!rv) {
                     return true;
                 }
@@ -752,7 +793,7 @@ namespace IC3 {
                 this->trivial = false;
                 PriorityQueue pq;
                 // enqueue main obligation and handle
-                pq.insert(Obligation(stateOf(frontier), k - 1, 1));
+                pq.insert(Obligation(this->stateOf(frontier), this->k - 1, 1));
                 if (!this->handleObligations(pq)) {
                     return false;
                 }
@@ -772,9 +813,10 @@ namespace IC3 {
             }
             // 1. clean up: remove c in frame i if c appears in frame j when i < j
             CubeSet all;
-            for (size_t i = k + 1; i >= this->earliest; --i) {
+            for (std::size_t i = this->k + 1; i >= this->earliest; --i) {
                 Frame &fr = this->frames[i];
-                CubeSet rem, nall;
+                CubeSet rem;
+                CubeSet nall;
                 std::set_difference(fr.borderCubes.begin(), fr.borderCubes.end(),
                                     all.begin(), all.end(),
                                     std::inserter(rem, rem.end()), LitVecComp());
@@ -794,8 +836,10 @@ namespace IC3 {
                 }
             }
             // 2. check if each c in frame i can be pushed to frame j
-            for (size_t i = this->trivial ? this->k : 1; i <= this->k; ++i) {
-                int ckeep = 0, cprop = 0, cdrop = 0;
+            for (std::size_t i = this->trivial ? this->k : 1; i <= this->k; ++i) {
+                int ckeep = 0;
+                int cprop = 0;
+                int cdrop = 0;
                 Frame &fr = this->frames[i];
                 for (CubeSet::iterator j = fr.borderCubes.begin();
                      j != fr.borderCubes.end();) {
@@ -803,7 +847,7 @@ namespace IC3 {
                     if (this->consecution(i, *j, 0, &core)) {
                         ++cprop;
                         // only add to frame i+1 unless the core is reduced
-                        this->addCube(i + 1, core, core.size() < j->size(), true);
+                        this->addCube(i + 1, core, core.size() < j->size());
                         CubeSet::iterator tmp = j;
                         ++j;
                         fr.borderCubes.erase(tmp);
@@ -827,41 +871,48 @@ namespace IC3 {
             return false;
         }
 
-        int nQuery, nCTI, nCTG, nmic;
-        clock_t startTime, satTime;
-        int nCoreReduced, nAbortJoin, nAbortMic;
-
-        clock_t time() {
-            struct tms t;
-            times(&t);
+        ::clock_t time() {
+            ::tms t{};
+            ::times(&t);
             return t.tms_utime;
         }
 
-        clock_t timer;
-        void startTimer() { timer = time(); }
-        void endTimer(clock_t &t) { t += (time() - timer); }
+        void startTimer() {
+            this->timer = this->time();
+        }
+
+        void endTimer(clock_t &t) {
+            t += (this->time() - this->timer);
+        }
 
         void printStats() {
-            if (!verbose) return;
-            clock_t etime = time();
-            cout << ". Elapsed time: " << ((double) etime / sysconf(_SC_CLK_TCK)) << endl;
-            etime -= startTime;
-            if (!etime) etime = 1;
-            cout << ". % SAT:        " << (int) (100 * (((double) satTime) / ((double) etime))) <<
-                    endl;
-            cout << ". K:            " << k << endl;
-            cout << ". # Queries:    " << nQuery << endl;
-            cout << ". # CTIs:       " << nCTI << endl;
-            cout << ". # CTGs:       " << nCTG << endl;
-            cout << ". # mic calls:  " << nmic << endl;
-            cout << ". Queries/sec:  " << (int) (
-                ((double) nQuery) / ((double) etime) * sysconf(_SC_CLK_TCK)) << endl;
-            cout << ". Mics/sec:     " << (int) (
-                ((double) nmic) / ((double) etime) * sysconf(_SC_CLK_TCK)) << endl;
-            cout << ". # Red. cores: " << nCoreReduced << endl;
-            cout << ". # Int. joins: " << nAbortJoin << endl;
-            cout << ". # Int. mics:  " << nAbortMic << endl;
-            if (numUpdates) cout << ". Avg lits/cls: " << numLits / numUpdates << endl;
+            if (!this->verbose) {
+                return;
+            }
+            clock_t etime = this->time();
+            std::cout << ". Elapsed time: " << ((double) etime / ::sysconf(_SC_CLK_TCK))
+                    << std::endl;
+            etime -= this->startTime;
+            if (!etime) {
+                etime = 1;
+            }
+            std::cout << ". % SAT:        " << (int) (100 * (((double) this->satTime) /
+                                                             ((double) etime))) << std::endl;
+            std::cout << ". K:            " << this->k << std::endl;
+            std::cout << ". # Queries:    " << this->nQuery << std::endl;
+            std::cout << ". # CTIs:       " << this->nCTI << std::endl;
+            std::cout << ". # CTGs:       " << this->nCTG << std::endl;
+            std::cout << ". # mic calls:  " << this->nmic << std::endl;
+            std::cout << ". Queries/sec:  " << (int) (
+                ((double) this->nQuery) / ((double) etime) * ::sysconf(_SC_CLK_TCK)) << std::endl;
+            std::cout << ". Mics/sec:     " << (int) (
+                ((double) this->nmic) / ((double) etime) * ::sysconf(_SC_CLK_TCK)) << std::endl;
+            std::cout << ". # Red. cores: " << this->nCoreReduced << std::endl;
+            std::cout << ". # Int. joins: " << this->nAbortJoin << std::endl;
+            std::cout << ". # Int. mics:  " << this->nAbortMic << std::endl;
+            if (this->numUpdates > 0.0) {
+                std::cout << ". Avg lits/cls: " << this->numLits / this->numUpdates << std::endl;
+            }
         }
 
         friend bool check(Model &, int, bool, bool);

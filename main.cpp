@@ -42,9 +42,7 @@ int main(int argc, char **argv) {
 
     // read AIGER model
     aiger *aig = aiger_init();
-    FILE *file = fopen("./aag_files/file.aag", "r+");
     const char *msg = aiger_read_from_file(aig, stdin);
-    fclose(file);
     if (msg) {
         logE("Error reading file: %s", msg);
         return -1;

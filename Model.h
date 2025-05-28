@@ -1,26 +1,3 @@
-/*********************************************************************
-Copyright (c) 2013, Aaron Bradley
-
-Permission is hereby granted, free of charge, to any person obtaining
-a copy of this software and associated documentation files (the
-"Software"), to deal in the Software without restriction, including
-without limitation the rights to use, copy, modify, merge, publish,
-distribute, sublicense, and/or sell copies of the Software, and to
-permit persons to whom the Software is furnished to do so, subject to
-the following conditions:
-
-The above copyright notice and this permission notice shall be
-included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-*********************************************************************/
-
 #ifndef MODEL_H_INCLUDED
 #define MODEL_H_INCLUDED
 
@@ -33,6 +10,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 extern "C" {
 #include "aiger.h"
 }
+
 #include "Solver.h"
 #include "SimpSolver.h"
 
@@ -42,43 +20,58 @@ using namespace std;
 
 // A row of the AIGER spec: lhs = rhs0 & rhs1.
 struct AigRow {
-  AigRow(Minisat::Lit _lhs, Minisat::Lit _rhs0, Minisat::Lit _rhs1) :
-    lhs(_lhs), rhs0(_rhs0), rhs1(_rhs1) {}
-  Minisat::Lit lhs, rhs0, rhs1;
+    AigRow(Minisat::Lit _lhs, Minisat::Lit _rhs0, Minisat::Lit _rhs1)
+        : lhs(_lhs), rhs0(_rhs0), rhs1(_rhs1) {
+    }
+
+    Minisat::Lit lhs, rhs0, rhs1;
 };
+
 // Intended to hold the AND section of an AIGER spec.
-typedef vector<AigRow> AigVec;
-typedef vector<Minisat::Lit> LitVec;
+typedef std::vector<AigRow> AigVec;
+typedef std::vector<Minisat::Lit> LitVec;
 
 // A lightweight wrapper around Minisat::Var that includes a name.
 class Var {
 public:
-  Var(const string name) {
-    _var = gvi++;
-    _name = name;
-  }
-  size_t index() const { return (size_t) _var; }
-  Minisat::Var var() const { return _var; }
-  Minisat::Lit lit(bool neg) const {
-    return Minisat::mkLit(_var, neg);
-  }
-  string name() const { return _name; }
+    Var(const string name) {
+        this->_var = Var::gvi++;
+        this->_name = name;
+    }
+
+    std::size_t index() const {
+        return (std::size_t) this->_var;
+    }
+
+    Minisat::Var var() const {
+        return this->_var;
+    }
+
+    Minisat::Lit lit(bool neg) const {
+        return Minisat::mkLit(this->_var, neg);
+    }
+
+    std::string name() const {
+        return this->_name;
+    }
+
 private:
-  static Minisat::Var gvi;  // aligned with solvers
-  Minisat::Var _var;        // corresponding Minisat::Var in *any* solver
-  string _name;
+    static Minisat::Var gvi; // aligned with solvers
+    Minisat::Var _var; // corresponding Minisat::Var in *any* solver
+    std::string _name;
 };
 
-typedef vector<Var> VarVec;
+typedef std::vector<Var> VarVec;
 
 class VarComp {
 public:
-  bool operator()(const Var & v1, const Var & v2) {
-    return v1.index() < v2.index();
-  }
+    bool operator()(const Var &v1, const Var &v2) const {
+        return v1.index() < v2.index();
+    }
 };
-typedef set<Var, VarComp> VarSet;
-typedef set<Minisat::Lit> LitSet;
+
+typedef std::set<Var, VarComp> VarSet;
+typedef std::set<Minisat::Lit> LitSet;
 
 // A simple wrapper around an AIGER-specified invariance benchmark.
 // It specifically disallows primed variables beyond those required to
@@ -87,155 +80,183 @@ typedef set<Minisat::Lit> LitSet;
 // variables of any solver created through newSolver().
 class Model {
 public:
-  // Construct a model from a vector of variables, indices indicating
-  // divisions between variable types, constraints, next-state
-  // functions, the error, and the AND table, closely reflecting the
-  // AIGER format.  Easier to use "modelFromAiger()", below.
-  Model(vector<Var> _vars, 
-        size_t _inputs, size_t _latches, size_t _reps, 
-        LitVec _init, LitVec _constraints, LitVec _nextStateFns, 
-        Minisat::Lit _err, AigVec _aig) :
-    vars(_vars), 
-    inputs(_inputs), latches(_latches), reps(_reps),
-    primes(_vars.size()), primesUnlocked(true), aig(_aig),
-    init(_init), constraints(_constraints), nextStateFns(_nextStateFns),
-    _error(_err), inits(NULL), sslv(NULL)
-  {
-    // create primed inputs and latches in known region of vars
-    for (size_t i = inputs; i < reps; ++i) {
-      stringstream ss;
-      ss << vars[i].name() << "'";
-      vars.push_back(Var(ss.str()));
+    // Construct a model from a vector of variables, indices indicating
+    // divisions between variable types, constraints, next-state
+    // functions, the error, and the AND table, closely reflecting the
+    // AIGER format.  Easier to use "modelFromAiger()", below.
+    Model(std::vector<Var> _vars,
+          std::size_t _inputs, std::size_t _latches, std::size_t _reps,
+          LitVec _init, LitVec _constraints, LitVec _nextStateFns,
+          Minisat::Lit _err, AigVec _aig)
+        : vars(_vars),
+          inputs(_inputs), latches(_latches), reps(_reps),
+          primes(_vars.size()), primesUnlocked(true), aig(_aig),
+          init(_init), constraints(_constraints), nextStateFns(_nextStateFns),
+          _error(_err), inits(nullptr), sslv(nullptr) {
+        // create primed inputs and latches in known region of vars
+        for (std::size_t i = this->inputs; i < this->reps; ++i) {
+            std::stringstream ss;
+            ss << vars[i].name() << "'";
+            this->vars.push_back(Var(ss.str()));
+        }
+        // same with primed error
+        this->_primedError = this->primeLit(this->_error);
+        // same with primed constraints
+        for (LitVec::const_iterator i = this->constraints.begin();
+             i != this->constraints.end(); ++i) {
+            this->primeLit(*i);
+        }
     }
-    // same with primed error
-    _primedError = primeLit(_error);
-    // same with primed constraints
-    for (LitVec::const_iterator i = constraints.begin(); 
-         i != constraints.end(); ++i)
-      primeLit(*i);
-  }
-  ~Model();
 
-  // Returns the Var of the given Minisat::Lit.
-  const Var & varOfLit(Minisat::Lit lit) const {
-    Minisat::Var v = Minisat::var(lit);
-    assert ((unsigned) v < vars.size());
-    return vars[v];
-  }
+    ~Model() {
+        delete this->inits;
+        delete this->sslv;
+    }
 
-  // Returns the name of the Minisat::Lit.
-  string stringOfLit(Minisat::Lit lit) const {
-    stringstream ss;
-    if (Minisat::sign(lit)) ss << "~";
-    ss << varOfLit(lit).name();
-    return ss.str();
-  }
+    // Returns the Var of the given Minisat::Lit.
+    const Var &varOfLit(const Minisat::Lit &lit) const {
+        Minisat::Var v = Minisat::var(lit);
+        assert((unsigned) v < this->vars.size());
+        return this->vars[v];
+    }
 
-  // Returns the primed Var/Minisat::Lit for the given
-  // Var/Minisat::Lit.  Once lockPrimes() is called, primeVar() fails
-  // (with an assertion violation) if it is asked to create a new
-  // variable.
-  const Var & primeVar(const Var & v, Minisat::SimpSolver * slv = NULL);
-  Minisat::Lit primeLit(Minisat::Lit lit, Minisat::SimpSolver * slv = NULL) {
-    const Var & pv = primeVar(varOfLit(lit), slv);
-    return pv.lit(Minisat::sign(lit));
-  }
-  Minisat::Lit unprimeLit(Minisat::Lit lit) {
-    size_t i = (size_t) var(lit);
-    if (i >= primes && i < primes + reps - inputs)
-      return Minisat::mkLit((Minisat::Var) (i - primes + inputs), sign(lit));
-    else
-      return lit;
-  }
+    // Returns the name of the Minisat::Lit.
+    string stringOfLit(const Minisat::Lit &lit) const {
+        std::stringstream ss;
+        if (Minisat::sign(lit)) ss << "~";
+        ss << varOfLit(lit).name();
+        return ss.str();
+    }
 
-  // Once all primed variables have been created, it locks the Model
-  // from creating any further ones.  Then Solver::newVar() may be
-  // called safely.
-  //
-  // WARNING: Do not call Solver::newVar() until lockPrimes() has been
-  // called.
-  void lockPrimes() { primesUnlocked = false; }
+    // Returns the primed Var/Minisat::Lit for the given
+    // Var/Minisat::Lit.  Once lockPrimes() is called, primeVar() fails
+    // (with an assertion violation) if it is asked to create a new
+    // variable.
+    const Var &primeVar(const Var &v, Minisat::SimpSolver *slv = nullptr);
 
-  // Minisat::Lits corresponding to true/false.
-  Minisat::Lit btrue() const { return Minisat::mkLit(vars[0].var(), true); }
-  Minisat::Lit bfalse() const { return Minisat::mkLit(vars[0].var(), false); }
+    Minisat::Lit primeLit(const Minisat::Lit &lit, Minisat::SimpSolver *slv = nullptr) {
+        const Var &pv = this->primeVar(this->varOfLit(lit), slv);
+        return pv.lit(Minisat::sign(lit));
+    }
 
-  // Primary inputs.
-  VarVec::const_iterator beginInputs() const { 
-    return vars.begin()+inputs; 
-  }
-  VarVec::const_iterator endInputs() const { 
-    return vars.begin()+latches; 
-  }
+    Minisat::Lit unprimeLit(const Minisat::Lit &lit) {
+        std::size_t i = (std::size_t) var(lit);
+        if (i >= this->primes && i < this->primes + this->reps - this->inputs) {
+            return Minisat::mkLit((Minisat::Var) (i - this->primes + this->inputs), sign(lit));
+        } else {
+            return lit;
+        }
+    }
 
-  // Latches.
-  VarVec::const_iterator beginLatches() const { 
-    return vars.begin()+latches; 
-  }
-  VarVec::const_iterator endLatches() const { 
-    return vars.begin()+reps; 
-  }
+    // Once all primed variables have been created, it locks the Model
+    // from creating any further ones.  Then Solver::newVar() may be
+    // called safely.
+    //
+    // WARNING: Do not call Solver::newVar() until lockPrimes() has been
+    // called.
+    void lockPrimes() {
+        this->primesUnlocked = false;
+    }
 
-  // Next-state function for given latch.
-  Minisat::Lit nextStateFn(const Var & latch) const {
-    assert (latch.index() >= latches && latch.index() < reps);
-    return nextStateFns[latch.index()-latches];
-  }
+    // Minisat::Lits corresponding to true/false.
+    Minisat::Lit btrue() const {
+        return Minisat::mkLit(this->vars[0].var(), true);
+    }
 
-  // Error and its primed form.
-  Minisat::Lit error() const { return _error; }
-  Minisat::Lit primedError() const { return _primedError; }
+    Minisat::Lit bfalse() const {
+        return Minisat::mkLit(this->vars[0].var(), false);
+    }
 
-  // Invariant constraints
-  const LitVec & invariantConstraints() { return constraints; }
+    // Primary inputs.
+    VarVec::const_iterator beginInputs() const {
+        return this->vars.begin() + this->inputs;
+    }
 
-  // Creates a Solver and initializes its variables to maintain
-  // alignment with the Model's variables.
-  Minisat::Solver * newSolver() const;
+    VarVec::const_iterator endInputs() const {
+        return this->vars.begin() + this->latches;
+    }
 
-  // Loads the TR into the solver.  Also loads the primed error
-  // definition such that Model::primedError() need only be asserted
-  // to activate it.  Invariant constraints (AIGER 1.9) and the
-  // negation of the error are always added --- except that the primed
-  // form of the invariant constraints are not asserted if
-  // !primeConstraints.
-  void loadTransitionRelation(Minisat::Solver & slv, 
-                              bool primeConstraints = true);
-  // Loads the initial condition into the solver.
-  void loadInitialCondition(Minisat::Solver & slv) const;
-  // Loads the error into the solver, which is only necessary for the
-  // 0-step base case of IC3.
-  void loadError(Minisat::Solver & slv) const;
+    // Latches.
+    VarVec::const_iterator beginLatches() const {
+        return this->vars.begin() + this->latches;
+    }
 
-  // Use this method to allow the Model to decide how best to decide
-  // if a cube has an initial state.
-  bool isInitial(const LitVec & latches);
+    VarVec::const_iterator endLatches() const {
+        return this->vars.begin() + this->reps;
+    }
+
+    // Next-state function for given latch.
+    Minisat::Lit nextStateFn(const Var &latch) const {
+        assert(latch.index() >= this->latches && latch.index() < this->reps);
+        return this->nextStateFns[latch.index() - this->latches];
+    }
+
+    // Error and its primed form.
+    Minisat::Lit error() const {
+        return this->_error;
+    }
+
+    Minisat::Lit primedError() const {
+        return this->_primedError;
+    }
+
+    // Invariant constraints
+    const LitVec &invariantConstraints() {
+        return this->constraints;
+    }
+
+    // Creates a Solver and initializes its variables to maintain
+    // alignment with the Model's variables.
+    Minisat::Solver *newSolver() const;
+
+    // Loads the TR into the solver.  Also loads the primed error
+    // definition such that Model::primedError() need only be asserted
+    // to activate it.  Invariant constraints (AIGER 1.9) and the
+    // negation of the error are always added --- except that the primed
+    // form of the invariant constraints are not asserted if
+    // !primeConstraints.
+    void loadTransitionRelation(Minisat::Solver &slv, bool primeConstraints = true);
+
+    // Loads the initial condition into the solver.
+    void loadInitialCondition(Minisat::Solver &slv) const;
+
+    // Loads the error into the solver, which is only necessary for the
+    // 0-step base case of IC3.
+    void loadError(Minisat::Solver &slv) const;
+
+    // Use this method to allow the Model to decide how best to decide
+    // if a cube has an initial state.
+    bool isInitial(const LitVec &latches);
 
 private:
-  VarVec vars;
-  const size_t inputs, latches, reps, primes;
+    VarVec vars;
+    const std::size_t inputs;
+    const std::size_t latches;
+    const std::size_t reps;
+    const std::size_t primes;
 
-  bool primesUnlocked;
-  typedef unordered_map<size_t, size_t> IndexMap;
-  IndexMap primedAnds;
+    bool primesUnlocked;
+    typedef unordered_map<std::size_t, std::size_t> IndexMap;
+    IndexMap primedAnds;
 
-  const AigVec aig;
-  const LitVec init, constraints, nextStateFns;
-  const Minisat::Lit _error;
-  Minisat::Lit _primedError;
+    const AigVec aig;
+    const LitVec init;
+    const LitVec constraints;
+    const LitVec nextStateFns;
+    const Minisat::Lit _error;
+    Minisat::Lit _primedError;
 
-  typedef size_t TRMapKey;
-  typedef unordered_map<TRMapKey, Minisat::SimpSolver *> TRMap;
-  TRMap trmap;
+    typedef size_t TRMapKey;
+    typedef unordered_map<TRMapKey, Minisat::SimpSolver *> TRMap;
+    TRMap trmap;
 
-  Minisat::Solver * inits;
-  LitSet initLits;
+    Minisat::Solver *inits;
+    LitSet initLits;
 
-  Minisat::SimpSolver * sslv;
-
+    Minisat::SimpSolver *sslv;
 };
 
 // The easiest way to create a model.
-Model * modelFromAiger(aiger * aig, unsigned int propertyIndex);
+Model *modelFromAiger(aiger *aig, unsigned int propertyIndex);
 
 #endif
