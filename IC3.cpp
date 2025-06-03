@@ -5,6 +5,7 @@
 
 #include "IC3.h"
 
+#include "Helpers.hpp"
 #include "Logger.hpp"
 #include "Solver.h"
 #include "Vec.h"
@@ -434,9 +435,10 @@ namespace IC3 {
         // Assumes that last call to fr.consecution->solve() was
         // satisfiable.  Extracts state(s) cube from satisfying
         // assignment.
-        size_t stateOf(Frame &fr, size_t succ = 0) {
+        std::size_t
+        stateOf(Frame &fr, std::size_t succ = 0) {
             // create state
-            size_t st = this->newState();
+            std::size_t st = this->newState();
             this->state(st).successor = succ;
             MSLitVec assumps;
             assumps.capacity(1 + 2 * (this->model.endInputs() - this->model.beginInputs())
@@ -918,29 +920,36 @@ namespace IC3 {
         friend bool check(Model &, int, bool, bool);
     };
 
-    bool step0Reachability(Model &model) {
-        Minisat::Solver *base0 = model.newSolver();
-        model.loadInitialCondition(*base0);
-        model.loadError(*base0);
-        const bool rv = base0->solve(model.error());
-        logV("Step 0 reachability SAT solver result: %s", rv ? "sat": "unsat");
-        delete base0;
-        return !rv;
+    bool
+    step0Reachability(Model &model) {
+        std::cout << "Checking step 0 reachability" << std::endl;
+        Minisat::Solver *solver = model.newSolver();
+        model.loadInitialCondition(*solver);
+        model.loadError(*solver);
+        ::printSolverClauses(*solver, model);
+        bool sat = solver->solve(model.error());
+        std::cout << "Step 0 reachability SAT solver result: " << (sat ? "sat" : "unsat") << std::endl;
+        delete solver;
+        return !sat;
     }
 
-    bool step1Reachability(Model &model) {
-        Minisat::Solver *base1 = model.newSolver();
-        model.loadInitialCondition(*base1);
-        model.loadTransitionRelation(*base1);
-        const bool rv = base1->solve(model.primedError());
-        logV("Step 1 reachability SAT solver result: %s", rv ? "sat": "unsat");
-        delete base1;
-        return !rv;
+    bool
+    step1Reachability(Model &model) {
+        std::cout << "Checking step 1 reachability" << std::endl;
+        Minisat::Solver *solver = model.newSolver();
+        model.loadInitialCondition(*solver);
+        model.loadTransitionRelation(*solver, true);
+        ::printSolverClauses(*solver, model);
+        bool sat = solver->solve(model.primedError());
+        std::cout << "Step 1 reachability SAT solver result: " << (sat ? "sat" : "unsat") << std::endl;
+        delete solver;
+        return !sat;
     }
 
     // IC3 does not check for 0-step and 1-step reachability, so do it
     // separately.
-    bool baseCases(Model &model) {
+    bool
+    baseCases(Model &model) {
         if (!step0Reachability(model)) {
             return false;
         }
@@ -954,7 +963,8 @@ namespace IC3 {
     }
 
     // External function to make the magic happen.
-    bool check(Model &model, int verbose, bool basic, bool random) {
+    bool
+    check(Model &model, int verbose, bool basic, bool random) {
         if (!baseCases(model)) {
             return false;
         }

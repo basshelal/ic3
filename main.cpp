@@ -55,13 +55,13 @@ int main(int argc, char **argv) {
     }
 
     // model check it
-    bool rv = IC3::check(*model, verbose, basic, random);
+    bool sat = IC3::check(*model, verbose, basic, random);
     // print 0/1 according to AIGER standard
     // 0 means unsafe, a bad state was found
     // 1 means safe, no bad states were found
-    printf("SAT solver result: %s\n", rv ? "sat" : "unsat");
-    printf("%d\n", !rv);
-    printf("%s\n", rv ? "unsafe" : "safe");
+    printf("SAT solver result: %s\n", sat ? "sat" : "unsat");
+    printf("%d\n", !sat);
+    printf("%s\n", sat ? "unsafe" : "safe");
 
     delete model;
 
